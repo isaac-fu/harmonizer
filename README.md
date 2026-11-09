@@ -25,6 +25,10 @@ npm run dev
 3. Choose **Modern Pop** (default), **Neo-Soul / R&B**, or **Traditional / Hymn**, and major or minor harmony color. Leave your singing range on **Detect from my recording**, or select Bass, Baritone, Tenor, Alto, Mezzo-soprano, or Soprano manually. Then generate.
 4. Preview the original and individual harmony tracks, listen together, and download each MP3.
 
+After generation, **Your turn** provides one practice card per generated harmony. Listen to its guide, click **Record [part]**, imitate the part, and click **Stop recording**. Your own unshifted recording is converted to MP3 and gets its own player and download link. Re-recording replaces only that part's take. **Play my recorded harmonies together** plays all available self-recorded takes from the beginning; it excludes the original and generated guides. Shorter takes can finish without cutting off longer ones. Use consistent starting timing across takes; browser playback does not align different performance entrances automatically. Use headphones if you listen to a guide while recording to avoid microphone bleed.
+
+For signed-in projects, your takes save with the project and reopen from **My projects**, under the same private ownership and latest-10 retention rules. Guest takes use the guest project's temporary lifetime. Failed conversion/upload keeps the raw take available for retry or download.
+
 Or click **Record audio**, allow microphone access, sing or play, then click **Stop recording**. The app converts your take to a real MP3 and automatically selects it as the input. You can preview it, then click **Generate harmonies**. Microphone recording requires localhost or HTTPS and a browser with MediaRecorder support. Recording stops automatically just before 10 minutes. Your microphone is released immediately when recording stops. If conversion fails, retry it or save the raw take without recording again.
 
 ### Accounts and saved projects

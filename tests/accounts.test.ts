@@ -132,6 +132,32 @@ test('guest projects remain temporary and are not included in an account library
   await request(service.app).get(`/api/jobs/${guest.id}`).expect(404);
 });
 
+test('self-recorded takes stay unshifted, replace one part at a time, remain private, and survive restart', async () => {
+  const alice = await register('alice@example.com');
+  const bob = await register('bob@example.com');
+  const job = await generate(alice.cookie);
+  const endpoint = `/api/jobs/${job.id}/takes/${job.tracks[0].name}`;
+  await request(service.app).post(endpoint).set('Cookie', bob.cookie).attach('file', fixture, 'my-take.mp3').expect(404);
+  const result = await request(service.app).post(endpoint).set('Cookie', alice.cookie).attach('file', fixture, 'my-take.mp3').expect(200);
+  const take = result.body.takes[0];
+  assert.equal(take.sourceTrackName, job.tracks[0].name);
+  assert.equal(take.semitones, 0);
+  assert.equal(result.body.takes.length, 1);
+  const download = await request(service.app).get(take.downloadUrl).set('Cookie', alice.cookie).expect(200);
+  assert.deepEqual(download.body, fixture); // Encoding conversion is done before upload; no pitch processing touches the take.
+  await request(service.app).get(take.url).expect(404);
+  await request(service.app).get(take.url).set('Cookie', bob.cookie).expect(404);
+  await request(service.app).post(endpoint).set('Cookie', alice.cookie).attach('file', Buffer.from('not audio'), 'bad.mp3').expect(400);
+  const replacement = await request(service.app).post(endpoint).set('Cookie', alice.cookie).attach('file', fixture, 'new-take.mp3').expect(200);
+  assert.equal(replacement.body.takes.length, 1);
+  assert.notEqual(replacement.body.takes[0].url, take.url);
+  service.dispose();
+  service = await createApp({ dataDir });
+  const reopened = await request(service.app).get(`/api/jobs/${job.id}`).set('Cookie', alice.cookie).expect(200);
+  assert.equal(reopened.body.takes.length, 1);
+  await request(service.app).get(reopened.body.takes[0].downloadUrl).set('Cookie', alice.cookie).expect(200);
+});
+
 test('auth validates input and blocks cross-site mutations and repeated guessing', async () => {
   await request(service.app).post('/api/auth/register').set('Origin', 'http://127.0.0.1:5173').send({ email: 'preview@example.com', password }).expect(201);
   await request(service.app).post('/api/auth/register').send({ email: 'bad', password: 'short' }).expect(400);

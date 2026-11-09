@@ -9,11 +9,13 @@ const recordingTypes = [
   { mime: 'audio/mp4', extension: 'mp4' },
 ];
 
-export default function AudioRecorder({ disabled, onRecorded, onBusyChange, onError }: {
+export default function AudioRecorder({ disabled, onRecorded, onBusyChange, onError, purpose = 'source', partLabel = '' }: {
   disabled: boolean;
-  onRecorded: (file: File) => void;
+  onRecorded: (file: File, signal: AbortSignal) => void | Promise<void>;
   onBusyChange: (busy: boolean) => void;
   onError: (message: string) => void;
+  purpose?: 'source' | 'practice';
+  partLabel?: string;
 }) {
   const [state, setState] = useState<RecorderState>('idle');
   const [seconds, setSeconds] = useState(0);
@@ -58,7 +60,8 @@ export default function AudioRecorder({ disabled, onRecorded, onBusyChange, onEr
       const mp3 = await response.blob();
       if (!mounted.current) return;
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      callbacks.current.onRecorded(new File([mp3], `recording-${stamp}.mp3`, { type: 'audio/mpeg' }));
+      await callbacks.current.onRecorded(new File([mp3], `recording-${stamp}.mp3`, { type: 'audio/mpeg' }), abort.signal);
+      if (!mounted.current) return;
       setPending(null);
     } catch (error) {
       if (!abort.signal.aborted && mounted.current) callbacks.current.onError(error instanceof Error ? error.message : 'Recording conversion failed.');
@@ -153,14 +156,14 @@ export default function AudioRecorder({ disabled, onRecorded, onBusyChange, onEr
   }
 
   return <div className={`recorder ${state === 'recording' ? 'is-recording' : ''}`}>
-    <div className="recording-divider"><span />or record it here<span /></div>
+    {purpose === 'source' && <div className="recording-divider"><span />or record it here<span /></div>}
     <div className="recorder-controls">
-      <div className="recorder-description"><strong>{state === 'recording' ? <><span className="recording-dot" /> Recording</> : 'Have a melody in mind?'}</strong><span>{state === 'recording' ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} / 10:00` : state === 'requesting' ? 'Waiting for microphone permission…' : state === 'converting' ? 'Preparing your MP3…' : 'Use your microphone. Up to 10 minutes.'}</span></div>
+      <div className="recorder-description"><strong>{state === 'recording' ? <><span className="recording-dot" /> Recording</> : purpose === 'practice' ? 'Sing this part yourself' : 'Have a melody in mind?'}</strong><span>{state === 'recording' ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} / 10:00` : state === 'requesting' ? 'Waiting for microphone permission…' : state === 'converting' ? 'Preparing your MP3…' : 'Use your microphone. Up to 10 minutes.'}</span></div>
       <button type="button" className={`record-button ${state === 'recording' ? 'stop-button' : ''}`} disabled={disabled || state === 'requesting' || state === 'converting'} onClick={() => state === 'recording' ? stop() : void start()}>
-        {state === 'recording' ? <Square size={13} fill="currentColor" /> : state === 'idle' ? <Mic size={15} /> : <LoaderCircle className="spin" size={15} />}{state === 'recording' ? 'Stop recording' : state === 'requesting' ? 'Connecting…' : state === 'converting' ? 'Converting…' : 'Record audio'}
+        {state === 'recording' ? <Square size={13} fill="currentColor" /> : state === 'idle' ? <Mic size={15} /> : <LoaderCircle className="spin" size={15} />}{state === 'recording' ? 'Stop recording' : state === 'requesting' ? 'Connecting…' : state === 'converting' ? 'Converting…' : purpose === 'practice' ? `Record ${partLabel}` : 'Record audio'}
       </button>
     </div>
-    <p className="recorder-note" role="status">{state === 'recording' ? 'Click Stop when you’re done. Your take will become the selected MP3.' : state === 'converting' ? 'Converting your take to MP3 and selecting it automatically.' : 'After you stop, your recording is converted to MP3 automatically.'}</p>
+    <p className="recorder-note" role="status">{purpose === 'practice' ? state === 'recording' ? 'Click Stop when you’re done. This saves your own voice for this part.' : state === 'converting' ? 'Preparing and saving your unshifted vocal take…' : 'Listen to the guide, then record. A new take replaces your previous take for this part.' : state === 'recording' ? 'Click Stop when you’re done. Your take will become the selected MP3.' : state === 'converting' ? 'Converting your take to MP3 and selecting it automatically.' : 'After you stop, your recording is converted to MP3 automatically.'}</p>
     {pending && state === 'idle' && <div className="recording-recovery"><span>Your take is still available.</span><button type="button" disabled={disabled} onClick={() => void convert(pending)}>Retry conversion</button><button type="button" onClick={() => void downloadTake()}><ArrowDownToLine size={12} /> Save raw take</button></div>}
   </div>;
 }

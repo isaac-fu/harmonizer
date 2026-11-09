@@ -38,6 +38,7 @@ export interface AudioTrack {
   lowNote?: string;
   highNote?: string;
   outsideRange?: boolean;
+  sourceTrackName?: string;
 }
 
 export interface HarmonyJob {
@@ -58,6 +59,7 @@ export interface HarmonyJob {
   duration?: number;
   original?: AudioTrack;
   tracks: AudioTrack[];
+  takes?: AudioTrack[];
   error?: string;
 }
 

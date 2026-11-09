@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { encodeMp3, hasRubberband, harmonyVoices, normalizeAudio } from '../../tools/audio.js';
@@ -239,9 +239,50 @@ export async function createApp(options: { dataDir?: string } = {}) {
     res.json(job);
   });
 
+  app.post('/api/jobs/:id/takes/:name', (req, res, next) => {
+    const job = accessibleJob(req.params.id, res.locals.user?.id);
+    if (!job || job.status !== 'complete' || (job.expiresAt && Date.parse(job.expiresAt) <= Date.now()) || !job.tracks.some(track => track.name === req.params.name)) {
+      res.status(404).json({ error: 'This harmony project is unavailable.' }); return;
+    }
+    if (activeJobs >= 2) { res.status(429).json({ error: 'The studio is busy. Please try saving your take again in a moment.' }); return; }
+    activeJobs++;
+    upload.single('file')(req, res, error => {
+      void (async () => {
+        let wav: string | undefined;
+        try {
+          if (error) throw error;
+          if (!req.file || !/\.mp3$/i.test(req.file.originalname)) { res.status(400).json({ error: 'Upload your recorded take as an MP3.' }); return; }
+          wav = path.join(uploadDir, `take-${randomUUID()}.wav`);
+          const duration = await normalizeAudio(req.file.path, wav, 'mp3');
+          if (duration > MAX_DURATION_SECONDS) { res.status(422).json({ error: 'Keep your vocal take under 10 minutes.' }); return; }
+          // Recheck after decoding: the project may have left the owner's latest 10.
+          const current = accessibleJob(req.params.id, res.locals.user?.id);
+          const guide = current?.tracks.find(track => track.name === req.params.name);
+          if (!current || !guide) { res.status(404).json({ error: 'This project is no longer available.' }); return; }
+          const name = `self_${guide.name}`;
+          await rename(req.file.path, path.join(jobDir, current.id, name));
+          const take = track(current.id, name, `Your ${guide.label.toLowerCase()}`);
+          const revision = randomUUID();
+          take.url += `?v=${revision}`;
+          take.downloadUrl += `&v=${revision}`;
+          take.sourceTrackName = guide.name;
+          current.takes = [...(current.takes ?? []).filter(item => item.sourceTrackName !== guide.name), take];
+          const owner = owners.get(current.id) ?? store.project(current.id)?.owner;
+          if (owner) store.putProject(owner, current);
+          jobs.set(current.id, current);
+          res.json(current);
+        } catch (caught) { next(caught); }
+        finally {
+          await Promise.all([req.file ? rm(req.file.path, { force: true }) : Promise.resolve(), wav ? rm(wav, { force: true }) : Promise.resolve()]).catch(console.error);
+          activeJobs--;
+        }
+      })();
+    });
+  });
+
   app.get('/api/jobs/:id/files/:name', (req, res, next) => {
     const job = accessibleJob(req.params.id, res.locals.user?.id);
-    const file = job && [job.original, ...job.tracks].find((item) => item?.name === req.params.name);
+    const file = job && [job.original, ...job.tracks, ...(job.takes ?? [])].find((item) => item?.name === req.params.name);
     if (!job || job.status !== 'complete' || (job.expiresAt && Date.parse(job.expiresAt) <= Date.now()) || !file) {
       res.status(404).json({ error: 'This audio file is unavailable or has expired.' }); return;
     }
