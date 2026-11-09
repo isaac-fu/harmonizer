@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { ArrowDownToLine, ArrowRight, AudioLines, Check, ChevronRight, CircleHelp, FileAudio, Headphones, Layers3, LoaderCircle, Music2, Pause, Play, Plus, Sparkles, Upload, X } from 'lucide-react';
-import { HARMONY_STYLES, MAX_UPLOAD_BYTES, VOICE_RANGES, type AudioTrack, type HarmonyJob, type HarmonyMode, type HarmonyStyle, type PartCount, type RangeSelection } from './shared/types';
+import { HARMONY_STYLES, MAX_UPLOAD_BYTES, VOICE_RANGES, type AccountUser, type AudioTrack, type HarmonyJob, type HarmonyMode, type HarmonyStyle, type PartCount, type RangeSelection } from './shared/types';
 import AudioRecorder from './AudioRecorder';
+import AccountPanel from './AccountPanel';
 
 const partNames = { 2: 'A little company', 3: 'Find your balance', 4: 'The full ensemble' };
 const voiceColors = ['#8c9c83', '#bc9778', '#9692b2', '#729ba0'];
@@ -91,6 +92,16 @@ export default function App() {
     setPlayingAll(false);
   }
 
+  function accountChanged(user: AccountUser | null) {
+    if (!user && job?.saved) { stopAll(); setJob(null); setFile(null); }
+  }
+
+  function openProject(project: HarmonyJob) {
+    if (busy || recorderBusy) return;
+    stopAll(); setFile(null); setJob(project); setError('');
+    setParts(project.parts); setMode(project.mode); setStyle(project.style); setVoiceRange(project.rangeSelection);
+  }
+
   function selectFile(candidate?: File, fromRecording = false) {
     if (!candidate || busy || (recorderBusy && !fromRecording)) return;
     if (!/\.(mp3|mp4|m4a)$/i.test(candidate.name)) { setError('Choose an MP3, MP4, or M4A file.'); return; }
@@ -153,8 +164,9 @@ export default function App() {
     <main>
       <div className="intro"><div><div className="eyebrow"><span /> ONE MELODY. MORE POSSIBILITY.</div><h1>Room for more voices.</h1><p>Give your melody a little company. Create layered harmonies<br className="desktop-break" /> from a single recording, one voice at a time.</p></div><div className="intro-art" aria-hidden="true"><div className="art-lines"><Waveform seed={4} /><Waveform seed={9} color="#bf9d83" /><Waveform seed={13} color="#a8a0bd" /></div><span><Music2 size={15} /> Better together.</span></div></div>
 
-      {showInfo && <aside className="info-panel"><div><h2>A few notes before you start</h2><p>Upload a solo vocal or melody, choose your total voices, then generate. We estimate your sung register and choose octaves for your selected harmony style to fit your selected singing range. These are parallel pitch-shifted versions of your recording, so they may not fit every chord. Full mixes will shift the instruments too.</p><p>MP4 audio is extracted automatically. Files are temporary, available for 24 hours or until the server restarts. Download anything you want to keep.</p></div><button className="icon-button" onClick={() => setShowInfo(false)} aria-label="Close instructions"><X size={18} /></button></aside>}
+      {showInfo && <aside className="info-panel"><div><h2>A few notes before you start</h2><p>Upload a solo vocal or melody, choose your total voices, then generate. We estimate your sung register and choose octaves for your selected harmony style to fit your selected singing range. These are parallel pitch-shifted versions of your recording, so they may not fit every chord. Full mixes will shift the instruments too.</p><p>MP4 audio is extracted automatically. Sign in before generating to save your latest 10 projects. Guest files last 24 hours or until the server restarts. Download anything you want to keep longer.</p></div><button className="icon-button" onClick={() => setShowInfo(false)} aria-label="Close instructions"><X size={18} /></button></aside>}
 
+      <AccountPanel disabled={!!busy || recorderBusy} completedProject={complete && job.saved ? job.id : ''} onUserChange={accountChanged} onOpen={openProject} />
       <div className="workspace">
         <section className="setup-panel" aria-labelledby="create-title">
           <div className="panel-top"><h2 id="create-title">Create your harmony</h2><span className="small-label">THE STARTING POINT</span></div>
@@ -190,7 +202,7 @@ export default function App() {
           <div className="panel-top"><h2 id="results-title">Your ensemble</h2><span className={`status-pill ${complete ? 'ready' : ''}`}><span />{busy ? 'IN THE MAKING' : complete ? `${job.parts} VOICES, ONE MELODY` : 'WAITING FOR YOUR MELODY'}</span></div>
           <div role="status" aria-live="polite" className="visually-hidden">{busy ? uploading ? 'Uploading recording' : `${job?.stage}, ${job?.progress} percent` : complete ? `${job.tracks.length} harmony tracks ready` : ''}</div>
           {busy ? <div className="processing-state"><div className="processing-disc"><AudioLines size={42} /></div><span className="small-label">A LITTLE STUDIO MAGIC</span><h3>{uploading ? 'Making room for your melody' : job?.stage}</h3><p>Good things come in layers.</p><div className="progress-track" role="progressbar" aria-label="Harmony generation" aria-valuemin={0} aria-valuemax={100} aria-valuenow={job?.progress ?? 0}><div style={{ width: `${job?.progress ?? 2}%` }} /></div><span className="progress-caption">{uploading ? 'Uploading' : `${job?.progress}% complete`}</span></div>
-            : complete ? <div className="results-content"><div className="results-intro"><span className="result-check"><Check size={18} /></span><div><h3>Sounds like good company.</h3><p>{job.tracks.length} new {job.tracks.length === 1 ? 'harmony' : 'harmonies'} · {Math.floor((job.duration ?? 0) / 60)}:{String(Math.floor((job.duration ?? 0) % 60)).padStart(2, '0')} · {HARMONY_STYLES[job.style].label} · {job.mode}</p></div></div><div className="track-list">{resultTracks.map((track, index) => <TrackCard key={track.url} track={track} index={index} register={el => { players.current[index] = el; }} onEnded={stopAll} />)}</div><button className="play-together" onClick={() => void toggleAll()}>{playingAll ? <Pause size={16} /> : <Play size={16} />}{playingAll ? 'Pause ensemble' : 'Listen together'}<span>Original + harmonies</span></button><p className="results-footnote">Your tracks are ready to take with you.<br />Download within 24 hours. Sessions reset when the server restarts.</p></div>
+            : complete ? <div className="results-content"><div className="results-intro"><span className="result-check"><Check size={18} /></span><div><h3>Sounds like good company.</h3><p>{job.tracks.length} new {job.tracks.length === 1 ? 'harmony' : 'harmonies'} · {Math.floor((job.duration ?? 0) / 60)}:{String(Math.floor((job.duration ?? 0) % 60)).padStart(2, '0')} · {HARMONY_STYLES[job.style].label} · {job.mode}</p></div></div><div className="track-list">{resultTracks.map((track, index) => <TrackCard key={track.url} track={track} index={index} register={el => { players.current[index] = el; }} onEnded={stopAll} />)}</div><button className="play-together" onClick={() => void toggleAll()}>{playingAll ? <Pause size={16} /> : <Play size={16} />}{playingAll ? 'Pause ensemble' : 'Listen together'}<span>Original + harmonies</span></button><p className="results-footnote">Your tracks are ready to take with you.<br />{job.saved ? "Saved to your account. Your latest 10 projects are kept." : "Guest project: download within 24 hours or before the server restarts."}</p></div>
             : <div className="empty-state"><div className="ensemble-illustration" aria-hidden="true"><div className="illustration-card card-back"><Waveform seed={2} color="#c6b6d0" /></div><div className="illustration-card card-mid"><Waveform seed={6} color="#c7a88d" /></div><div className="illustration-card card-front"><div className="mini-track"><span><Music2 size={15} /></span><div><i /><i /></div><span className="mini-play"><Play size={10} fill="currentColor" /></span></div><Waveform seed={3} /></div><span className="illustration-plus"><Plus size={19} /></span></div><h3>A solo, soon to be an ensemble.</h3><p>Your original melody and new harmony tracks<br />will come together right here.</p><div className="empty-tags"><span><Play size={12} /> Preview each voice</span><span><ArrowDownToLine size={13} /> Download MP3s</span></div></div>}
           <div className="results-bottom"><Layers3 size={17} /><span>Individual voices. Endless possibilities.</span><Music2 size={15} /></div>
         </section>

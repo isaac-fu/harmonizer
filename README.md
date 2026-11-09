@@ -4,7 +4,7 @@ A TypeScript React + Express app that turns an MP3, M4A, or the audio from an MP
 
 ## Run locally
 
-Requires Node.js 22 or newer.
+Requires Node.js 22.13 or newer (Node 24 recommended). Account storage uses the built-in SQLite module.
 
 ```sh
 npm install
@@ -26,6 +26,16 @@ npm run dev
 4. Preview the original and individual harmony tracks, listen together, and download each MP3.
 
 Or click **Record audio**, allow microphone access, sing or play, then click **Stop recording**. The app converts your take to a real MP3 and automatically selects it as the input. You can preview it, then click **Generate harmonies**. Microphone recording requires localhost or HTTPS and a browser with MediaRecorder support. Recording stops automatically just before 10 minutes. Your microphone is released immediately when recording stops. If conversion fails, retry it or save the raw take without recording again.
+
+### Accounts and saved projects
+
+Use **Create account** with an email and a 12–128 character password, or **Sign in** to an existing account. Sign in **before generating**: successful projects save automatically, including the original MP3, harmony tracks, settings, and detected range. **My projects** opens your library, where you can reopen projects to play and download their audio. Only the owner can view a saved project or stream/download its files. Guests can still use the studio, with temporary projects.
+
+Each account keeps its **latest 10 successful projects**, ordered by creation time. Completing an 11th removes the oldest project's metadata and audio; unfinished/failed jobs do not displace completed projects. The library explains this retention rule. Download projects you want to keep outside the latest 10. Saved projects and login sessions survive server restarts.
+
+Metadata and accounts are stored in `.data/harmonizer.sqlite` (with SQLite WAL files); audio remains under `.data/jobs/`. Preserve/back up the entire data directory. This is persistent local storage for a single server instance; cloud object storage and distributed background workers remain future work. Interrupted in-progress projects are removed on restart; the last 10 successful projects remain.
+
+Passwords use salted scrypt (N=32768, r=8, p=3), and opaque session tokens are stored as SHA-256 hashes. Browser sessions last 30 days in HttpOnly, SameSite=Lax cookies; logout revokes the current token. Auth requests are rate limited and cross-site mutations are rejected. Set `COOKIE_SECURE=true` and `APP_ORIGIN` to your public HTTPS frontend origin when deploying behind a proxy. Development allows the Vite origin `http://127.0.0.1:5173`; production (`NODE_ENV=production`) requires same-origin requests or an explicitly configured `APP_ORIGIN`. Email is an account identifier; email verification, password reset, and social sign-in are not included yet.
 
 | Total parts | Generated tracks |
 | --- | --- |
@@ -79,7 +89,9 @@ tests/api.test.ts      Real audio conversion and API tests
 
 `POST /api/recordings` accepts one multipart `file` in browser-recorded WebM, Ogg, MP4, or M4A format and returns an `audio/mpeg` MP3. It shares the two-worker processing limit, enforces the same upload/duration limits, and removes conversion files after responding. The frontend keeps the resulting MP3 as the selected file; generating harmonies uses the existing MP3 upload flow.
 
-Temporary files live in ignored `.data/`. Sessions expire after 24 hours, and expired files are cleaned hourly and at startup. Job metadata is in memory; restarting the backend makes existing sessions inaccessible. Abandoned files are removed after 24 hours. Two jobs can run at once; additional uploads receive HTTP 429.
+Temporary files live in ignored `.data/`. Guest projects expire after 24 hours; restarting the backend makes guest sessions inaccessible. Expired guest/abandoned files are cleaned hourly and at startup. Saved account projects are excluded from temporary cleanup and retained until they leave the account's latest 10. Two audio jobs can run at once; additional uploads receive HTTP 429.
+
+Account API: `POST /api/auth/register` and `POST /api/auth/login` accept JSON `email` and `password` and set a session cookie. `GET /api/auth/session` returns the current user (or null); `POST /api/auth/logout` revokes the session. `GET /api/projects` requires authentication and returns only that account's latest 10 completed projects. Existing job and file endpoints check ownership for account projects and return 404 to other users.
 
 ## Build and verify
 
@@ -90,15 +102,13 @@ npm run build
 npm start
 ```
 
-`npm start` serves the built React app and API together at http://127.0.0.1:3001. `PORT`, `HOST`, `DATA_DIR`, and `FFMPEG_PATH` can be set in the environment; `.env.example` documents defaults (the app does not automatically load `.env`). The server binds to loopback by default. Before public deployment, add authentication, quotas/rate limits, and a persistent worker queue; audio processing requires a Node host capable of running FFmpeg, not static hosting.
+`npm start` serves the built React app and API together at http://127.0.0.1:3001. `PORT`, `HOST`, `DATA_DIR`, `COOKIE_SECURE`, and `FFMPEG_PATH` can be set in the environment; `.env.example` documents defaults (the app does not automatically load `.env`). The server binds to loopback by default. Public deployment requires HTTPS with secure cookies, persistent disk, and appropriate upload quotas and a persistent worker queue; audio processing requires a Node host capable of running FFmpeg, not static hosting.
 
 Tests generate real MP3, MP4, and M4A fixtures, exercise 2–4 parts, decode downloads to verify pitch and duration, check range streaming, and reject invalid uploads and overly long recordings.
 
 ## Later
 
-- User accounts and authenticated project ownership.
-- Persistent projects, keeping the latest 10 per account.
 - Durable object storage and background workers.
 - Key/chord-aware harmonization and vocal isolation.
 
-The shared job/track types and isolated audio tools provide seams for these additions. Accounts and saved project history are not implemented yet.
+The shared job/track types and isolated audio tools provide seams for these additions. Accounts and the latest 10 saved projects per account are implemented using local SQLite and disk storage.

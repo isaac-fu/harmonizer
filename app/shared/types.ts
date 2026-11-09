@@ -53,7 +53,8 @@ export interface HarmonyJob {
   analysis?: PitchAnalysis;
   sourceName: string;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
+  saved?: boolean;
   duration?: number;
   original?: AudioTrack;
   tracks: AudioTrack[];
@@ -62,3 +63,4 @@ export interface HarmonyJob {
 
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 export const MAX_DURATION_SECONDS = 600;
+export interface AccountUser { id: string; email: string; }

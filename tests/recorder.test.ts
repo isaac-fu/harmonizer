@@ -52,6 +52,7 @@ before(() => {
   setGlobal('MediaRecorder', FakeRecorder);
   setGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   setGlobal('fetch', async (url: string, options: RequestInit) => {
+    if (url === '/api/auth/session') return Response.json({ user: null });
     assert.equal(url, '/api/recordings');
     assert.equal(options.method, 'POST');
     const input = (options.body as FormData).get('file') as File;

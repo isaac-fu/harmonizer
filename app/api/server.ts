@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { encodeMp3, hasRubberband, harmonyVoices, normalizeAudio } from '../../tools/audio.js';
 import { analyzeVoice, noteName } from '../../tools/pitch.js';
 import { HARMONY_STYLES, MAX_DURATION_SECONDS, MAX_UPLOAD_BYTES, VOICE_RANGES, type AudioTrack, type HarmonyJob, type HarmonyStyle, type PartCount, type RangeSelection } from '../shared/types.js';
+import { Store } from './store.js';
+import { authRouter, sessionToken } from './auth.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -20,15 +22,44 @@ export async function createApp(options: { dataDir?: string } = {}) {
   const uploadDir = path.join(dataDir, 'uploads');
   const jobDir = path.join(dataDir, 'jobs');
   await Promise.all([mkdir(uploadDir, { recursive: true }), mkdir(jobDir, { recursive: true })]);
+  const store = new Store(path.join(dataDir, 'harmonizer.sqlite'));
+  for (const id of store.recoverInterrupted()) await rm(path.join(jobDir, id), { recursive: true, force: true });
   const jobs = new Map<string, HarmonyJob>();
+  const owners = new Map<string, string>();
   let activeJobs = 0;
   const app = express();
+  const appOrigins = new Set((process.env.APP_ORIGIN ?? (process.env.NODE_ENV === 'production' ? '' : 'http://127.0.0.1:5173')).split(',').map(origin => origin.trim()).filter(Boolean));
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     next();
   });
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      const origin = req.get('Origin');
+      let allowed = !origin;
+      try { if (origin) allowed = new URL(origin).origin === `${req.protocol}://${req.get('host')}` || appOrigins.has(origin); } catch { allowed = false; }
+      if (!allowed || req.get('Sec-Fetch-Site') === 'cross-site') {
+        res.status(403).json({ error: 'This request must come from the Harmonizer app.' }); return;
+      }
+    }
+    res.locals.user = store.userForSession(sessionToken(req));
+    next();
+  });
+  app.use(express.json({ limit: '8kb' }));
+  app.use('/api/auth', authRouter(store));
+  app.get('/api/projects', (_req, res) => {
+    if (!res.locals.user) { res.status(401).json({ error: 'Sign in to view your projects.' }); return; }
+    res.json({ projects: store.projects(res.locals.user.id), limit: 10 });
+  });
+  function accessibleJob(id: string, userId?: string): HarmonyJob | undefined {
+    const saved = store.project(id);
+    const owner = owners.get(id) ?? saved?.owner;
+    if (owner && owner !== userId) return;
+    return jobs.get(id) ?? saved?.job;
+  }
 
   const upload = multer({
     storage: multer.diskStorage({ destination: uploadDir, filename: (_req, _file, cb) => cb(null, randomUUID()) }),
@@ -99,7 +130,7 @@ export async function createApp(options: { dataDir?: string } = {}) {
     downloadUrl: `/api/jobs/${id}/files/${name}?download=1`,
   });
 
-  async function processJob(job: HarmonyJob, input: string, directory: string) {
+  async function processJob(job: HarmonyJob, input: string, directory: string, owner?: string) {
     const wav = path.join(directory, 'source.wav');
     const pcm = path.join(directory, 'analysis.pcm');
     try {
@@ -135,6 +166,15 @@ export async function createApp(options: { dataDir?: string } = {}) {
       job.stage = 'Your harmony is ready';
       job.progress = 100;
       job.status = 'complete';
+      if (owner) {
+        job.saved = true;
+        const removed = store.completeProject(owner, job);
+        for (const id of removed) {
+          jobs.delete(id);
+          owners.delete(id);
+          await rm(path.join(jobDir, id), { recursive: true, force: true }).catch(console.error);
+        }
+      }
     } catch (error) {
       console.error(`Harmony job ${job.id} failed:`, error);
       job.status = 'failed';
@@ -143,6 +183,9 @@ export async function createApp(options: { dataDir?: string } = {}) {
         ? error.message : 'We could not decode this recording. Try a valid MP3, M4A, or an MP4 with an audio track.';
       job.original = undefined;
       job.tracks = [];
+      job.saved = false;
+      job.expiresAt = new Date(Date.now() + DAY).toISOString();
+      if (owner) store.deleteProject(job.id);
       await rm(directory, { recursive: true, force: true }).catch(console.error);
     } finally {
       await Promise.all([rm(input, { force: true }), rm(wav, { force: true }), rm(pcm, { force: true })]).catch(console.error);
@@ -170,15 +213,17 @@ export async function createApp(options: { dataDir?: string } = {}) {
         const directory = path.join(jobDir, id);
         await mkdir(directory);
         const now = Date.now();
+        const owner: string | undefined = res.locals.user?.id;
         const job: HarmonyJob = {
           id, status: 'processing', stage: 'Reading your recording', progress: 5,
           parts: parts as PartCount, mode, style: style as HarmonyStyle, rangeSelection: rangeSelection as RangeSelection,
           sourceName: path.basename(req.file.originalname), createdAt: new Date(now).toISOString(),
-          expiresAt: new Date(now + DAY).toISOString(), tracks: [],
+          expiresAt: owner ? null : new Date(now + DAY).toISOString(), saved: false, tracks: [],
         };
+        if (owner) { store.putProject(owner, job); owners.set(id, owner); }
         jobs.set(id, job);
         res.status(202).json(job);
-        void processJob(job, req.file.path, directory);
+        void processJob(job, req.file.path, directory, owner);
       })().catch(async (error) => {
         activeJobs--;
         if (req.file) await rm(req.file.path, { force: true }).catch(console.error);
@@ -188,16 +233,16 @@ export async function createApp(options: { dataDir?: string } = {}) {
   });
 
   app.get('/api/jobs/:id', (req, res) => {
-    const job = jobs.get(req.params.id);
+    const job = accessibleJob(req.params.id, res.locals.user?.id);
     res.setHeader('Cache-Control', 'no-store');
-    if (!job || Date.parse(job.expiresAt) <= Date.now()) { res.status(404).json({ error: 'This session has expired. Upload your recording again.' }); return; }
+    if (!job || (job.expiresAt && Date.parse(job.expiresAt) <= Date.now())) { res.status(404).json({ error: 'This project is unavailable or has expired. Sign in to its account or upload your recording again.' }); return; }
     res.json(job);
   });
 
   app.get('/api/jobs/:id/files/:name', (req, res, next) => {
-    const job = jobs.get(req.params.id);
+    const job = accessibleJob(req.params.id, res.locals.user?.id);
     const file = job && [job.original, ...job.tracks].find((item) => item?.name === req.params.name);
-    if (!job || job.status !== 'complete' || Date.parse(job.expiresAt) <= Date.now() || !file) {
+    if (!job || job.status !== 'complete' || (job.expiresAt && Date.parse(job.expiresAt) <= Date.now()) || !file) {
       res.status(404).json({ error: 'This audio file is unavailable or has expired.' }); return;
     }
     const filename = path.join(jobDir, job.id, file.name);
@@ -224,16 +269,18 @@ export async function createApp(options: { dataDir?: string } = {}) {
   });
 
   async function cleanup() {
+    store.cleanupSessions();
     for (const [id, job] of jobs) {
-      if (job.status !== 'processing' && Date.parse(job.expiresAt) <= Date.now()) {
+      if (job.status !== 'processing' && job.expiresAt && Date.parse(job.expiresAt) <= Date.now()) {
         await rm(path.join(jobDir, id), { recursive: true, force: true });
         jobs.delete(id);
+        owners.delete(id);
       }
     }
     // Includes abandoned files from a previous server process.
     for (const parent of [uploadDir, jobDir]) {
       for (const entry of await readdir(parent, { withFileTypes: true })) {
-        if (parent === jobDir && jobs.get(entry.name)?.status === 'processing') continue;
+        if (parent === jobDir && (jobs.get(entry.name)?.status === 'processing' || store.project(entry.name))) continue;
         const filename = path.join(parent, entry.name);
         if (Date.now() - (await stat(filename)).mtimeMs > DAY) await rm(filename, { recursive: entry.isDirectory(), force: true });
       }
@@ -242,5 +289,5 @@ export async function createApp(options: { dataDir?: string } = {}) {
   await cleanup();
   const timer = setInterval(() => { void cleanup().catch(console.error); }, 60 * 60 * 1000);
   timer.unref();
-  return { app, dispose: () => clearInterval(timer) };
+  return { app, dispose: () => { clearInterval(timer); store.close(); } };
 }
