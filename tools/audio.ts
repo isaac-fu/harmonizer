@@ -5,10 +5,10 @@ import { VOICE_RANGES, type HarmonyMode, type HarmonyStyle, type PartCount, type
 export const ffmpegPath = process.env.FFMPEG_PATH || (ffmpegStatic as unknown as string | null);
 
 /** Never invokes a shell; uploaded filenames cannot become executable arguments. */
-export function runFfmpeg(args: string[], timeoutMs = 300_000): Promise<{ stdout: string; stderr: string }> {
+export function runFfmpeg(args: string[], timeoutMs = 300_000, cwd?: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) return reject(new Error('FFmpeg is unavailable. Set FFMPEG_PATH to an installed binary.'));
-    const child = spawn(ffmpegPath, ['-hide_banner', '-nostdin', '-y', ...args], { windowsHide: true });
+    const child = spawn(ffmpegPath, ['-hide_banner', '-nostdin', '-y', ...args], { windowsHide: true, cwd });
     let stdout = '';
     let stderr = '';
     let timedOut = false;

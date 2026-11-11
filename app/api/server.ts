@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { encodeMp3, hasRubberband, harmonyVoices, normalizeAudio } from '../../tools/audio.js';
 import { analyzeVoice, noteName } from '../../tools/pitch.js';
+import { parseMusic, planHarmonies, renderHarmony, trackMelody } from '../../tools/harmonize.js';
 import { HARMONY_STYLES, MAX_DURATION_SECONDS, MAX_UPLOAD_BYTES, VOICE_RANGES, type AudioTrack, type HarmonyJob, type HarmonyStyle, type PartCount, type RangeSelection } from '../shared/types.js';
 import { Store } from './store.js';
 import { authRouter, sessionToken } from './auth.js';
@@ -63,7 +64,7 @@ export async function createApp(options: { dataDir?: string } = {}) {
 
   const upload = multer({
     storage: multer.diskStorage({ destination: uploadDir, filename: (_req, _file, cb) => cb(null, randomUUID()) }),
-    limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 4, parts: 5, fieldSize: 100 },
+    limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 5, parts: 6, fieldSize: 8192 },
     fileFilter: (_req, file, cb) => {
       if (!['.mp3', '.mp4', '.m4a'].includes(path.extname(file.originalname).toLowerCase())) {
         cb(new Error('Please upload an MP3, MP4, or M4A file.'));
@@ -142,17 +143,28 @@ export async function createApp(options: { dataDir?: string } = {}) {
       job.progress = 15;
       job.analysis = await analyzeVoice(wav, pcm);
       job.targetRange = job.rangeSelection === 'auto' ? job.analysis.detectedRange ?? undefined : job.rangeSelection;
+      job.stage = 'Following your melody and building note targets';
+      const melody = await trackMelody(pcm, duration);
+      if (melody.filter(frame => frame.midi !== null).length < 3) throw new Error('No clear solo melody detected. Try a clean vocal recording without accompaniment.');
+      if (job.music?.strategy === 'chords' && job.music.chords.some(chord => chord.start >= duration)) throw new Error('A chord change starts after the audio ends. Adjust the chord times and regenerate.');
+      const plans = planHarmonies(melody, job.music!, job.style, job.parts - 1, job.targetRange);
+      if (plans.some(plan => !plan.length)) throw new Error('No playable harmony notes were found. Adjust the scale, chords, or direction.');
+      job.musicWarning = 'The original melody is unchanged. Key/scale and supplied chords guide the new parts; wrong musical settings or mixed/instrumental audio can still clash.';
       await encodeMp3(wav, path.join(directory, 'audio_original.mp3'), duration);
       job.original = track(job.id, 'audio_original.mp3', 'Original');
       job.progress = 30;
       const voices = harmonyVoices(job.parts, job.mode, job.analysis, job.targetRange, job.style);
-      for (const [index, { voice, label, semitones }] of voices.entries()) {
+      for (const [index, { voice, label: styleLabel }] of voices.entries()) {
+        const label = index === 0 && job.music?.dyad !== 'style' ? `${job.music?.dyad === 'sixth' ? 'Sixth' : job.music?.dyad === 'fifth' ? 'Fifth' : 'Third'} harmony` : styleLabel;
         job.stage = `Creating your ${label.toLowerCase()}`;
         const name = `audio_${voice}.mp3`;
-        await encodeMp3(wav, path.join(directory, name), duration, semitones);
-        const audioTrack = track(job.id, name, label, semitones);
-        if (job.analysis.lowMidi !== undefined && job.analysis.highMidi !== undefined) {
-          const low = job.analysis.lowMidi + semitones, high = job.analysis.highMidi + semitones;
+        const plan = plans[index];
+        await renderHarmony(wav, path.join(directory, name), duration, plan, directory, index);
+        const audioTrack = track(job.id, name, label, plan[0].target - plan[0].source);
+        audioTrack.tuning = job.music?.strategy === 'chords' ? 'chord-aware' : 'diatonic';
+        audioTrack.notePlan = plan;
+        {
+          const low = Math.min(...plan.map(note => note.target)), high = Math.max(...plan.map(note => note.target));
           audioTrack.lowNote = noteName(low);
           audioTrack.highNote = noteName(high);
           if (job.targetRange) {
@@ -179,7 +191,7 @@ export async function createApp(options: { dataDir?: string } = {}) {
       console.error(`Harmony job ${job.id} failed:`, error);
       job.status = 'failed';
       job.stage = 'Unable to create harmonies';
-      job.error = error instanceof Error && /no longer than|timed out|no decodable/.test(error.message)
+      job.error = error instanceof Error && /no longer than|timed out|no decodable|No clear solo|No playable harmony|chord change starts|Note-aware harmony/.test(error.message)
         ? error.message : 'We could not decode this recording. Try a valid MP3, M4A, or an MP4 with an audio track.';
       job.original = undefined;
       job.tracks = [];
@@ -188,7 +200,7 @@ export async function createApp(options: { dataDir?: string } = {}) {
       if (owner) store.deleteProject(job.id);
       await rm(directory, { recursive: true, force: true }).catch(console.error);
     } finally {
-      await Promise.all([rm(input, { force: true }), rm(wav, { force: true }), rm(pcm, { force: true })]).catch(console.error);
+      await Promise.all([rm(input, { force: true }), rm(wav, { force: true }), rm(pcm, { force: true }), ...[0, 1, 2].map(index => rm(path.join(directory, `harmony-${index}.cmd`), { force: true }))]).catch(console.error);
       activeJobs--;
     }
   }
@@ -203,6 +215,7 @@ export async function createApp(options: { dataDir?: string } = {}) {
         const mode = req.body?.mode;
         const rangeSelection = req.body?.voiceRange ?? 'auto';
         const style = req.body?.style ?? 'modern-pop';
+        const music = parseMusic(req.body?.music, mode);
         if (!req.file || ![2, 3, 4].includes(parts) || !['major', 'minor'].includes(mode) || !['auto', ...Object.keys(VOICE_RANGES)].includes(rangeSelection) || !Object.hasOwn(HARMONY_STYLES, style)) {
           res.status(400).json({ error: 'Choose a supported audio file, 2–4 parts, a major or minor harmony, a valid voice range, and a supported harmony style.' });
           if (req.file) await rm(req.file.path, { force: true });
@@ -216,7 +229,7 @@ export async function createApp(options: { dataDir?: string } = {}) {
         const owner: string | undefined = res.locals.user?.id;
         const job: HarmonyJob = {
           id, status: 'processing', stage: 'Reading your recording', progress: 5,
-          parts: parts as PartCount, mode, style: style as HarmonyStyle, rangeSelection: rangeSelection as RangeSelection,
+          parts: parts as PartCount, mode, style: style as HarmonyStyle, rangeSelection: rangeSelection as RangeSelection, music,
           sourceName: path.basename(req.file.originalname), createdAt: new Date(now).toISOString(),
           expiresAt: owner ? null : new Date(now + DAY).toISOString(), saved: false, tracks: [],
         };
@@ -305,7 +318,7 @@ export async function createApp(options: { dataDir?: string } = {}) {
     if (error instanceof multer.MulterError) {
       res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Your file is too large. The limit is 50 MB.' : 'Upload one file with only parts, mode, voiceRange, and style options.' });
     } else {
-      res.status(400).json({ error: error.message === 'Please upload an MP3, MP4, or M4A file.' ? error.message : 'The upload could not be completed. Please try again.' });
+      res.status(400).json({ error: /^(Please upload|Invalid musical|Chord changes|Start your chord)/.test(error.message) ? error.message : 'The upload could not be completed. Please try again.' });
     }
   });
 

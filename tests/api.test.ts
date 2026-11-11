@@ -84,7 +84,7 @@ test('MP4 is converted to an original MP3 and minor harmony tracks', async () =>
   assert.equal(job.status, 'complete', job.error);
   assert.equal(job.original?.name, 'audio_original.mp3');
   assert.deepEqual(job.tracks.map(track => track.name), ['audio_tenor.mp3', 'audio_alto.mp3']);
-  assert.equal(job.tracks[0].semitones, 3);
+  assert.equal(job.tracks[0].tuning, 'diatonic');
 });
 
 test('invalid options, extensions, missing uploads, and missing jobs are rejected', async () => {
@@ -124,7 +124,7 @@ test('a low bass recording is detected and creates upward, playable harmonies wi
   assert.equal(job.targetRange, 'bass');
   assert.equal(job.analysis?.lowNote, 'E2');
   assert.equal(job.style, 'modern-pop');
-  assert.deepEqual(job.tracks.map(track => track.semitones), [4, 9, 14]);
+  assert.deepEqual(job.tracks.map(track => track.semitones), [3, 8, 13]);
   assert.ok(job.tracks.every(track => track.lowNote && track.highNote && !track.outsideRange));
   for (const track of job.tracks) await request(service.app).get(track.url).expect(200);
   const manual = await request(service.app).post('/api/jobs').field('parts', '2').field('mode', 'major').field('voiceRange', 'baritone').attach('file', filename).expect(202);
@@ -139,8 +139,7 @@ test('hymn and neo-soul selections generate distinct interval colors and labeled
     assert.equal(job.status, 'complete', job.error);
     assert.equal(job.style, style);
     assert.equal(job.tracks.length, 3);
-    const pitchClasses = job.tracks.map(track => ((track.semitones % 12) + 12) % 12);
-    assert.deepEqual(pitchClasses, style === 'hymn' ? [7, 4, 0] : [4, 11, 2]);
+    assert.ok(job.tracks.every(track => track.tuning === 'diatonic' && track.notePlan?.every(note => [0, 2, 4, 5, 7, 9, 11].includes(note.target % 12))));
     assert.deepEqual(job.tracks.map(track => track.label), style === 'hymn' ? ['Fifth harmony', 'Third harmony', 'Octave harmony'] : ['Third harmony', 'Seventh harmony', 'Ninth harmony']);
     for (const track of job.tracks) await request(service.app).get(track.downloadUrl).expect(200);
   }
@@ -155,6 +154,27 @@ test('the FFmpeg fallback supports modern ninths without changing track length',
   let crossings = 0;
   for (let i = 11026; i < 41895; i++) if (bytes.readInt16LE((i - 1) * 2) <= 0 && bytes.readInt16LE(i * 2) > 0) crossings++;
   assert.ok(Math.abs(crossings / .7 - 440 * 2 ** (14 / 12)) < 6);
+});
+
+test('the chord timeline renders different chord tones over a held melody and validates musical settings', async () => {
+  const music = { key: 0, scale: 'major', strategy: 'chords', dyad: 'third', direction: 'above', chords: [{ start: 0, root: 0, quality: 'maj' }, { start: .6, root: 1, quality: 'maj' }] };
+  const response = await request(service.app).post('/api/jobs').field('parts', '2').field('mode', 'major').field('music', JSON.stringify(music)).attach('file', mp3).expect(202);
+  const job = await finish(response.body.id);
+  assert.equal(job.status, 'complete', job.error);
+  assert.equal(job.tracks[0].tuning, 'chord-aware');
+  assert.ok(job.tracks[0].notePlan!.some(note => note.start >= .6 && note.target % 12 === 1));
+  const audio = await request(service.app).get(job.tracks[0].downloadUrl).expect(200);
+  const filename = path.join(directory, 'chord-aware.mp3');
+  const pcm = path.join(directory, 'chord-aware.pcm');
+  await writeFile(filename, audio.body);
+  await runFfmpeg(['-v', 'error', '-i', filename, '-ac', '1', '-ar', '44100', '-f', 's16le', pcm]);
+  const bytes = await readFile(pcm);
+  for (const [start, end, expected] of [[.15, .4, 523.25], [.85, 1.05, 554.37]]) {
+    let count = 0;
+    for (let i = Math.round(start * 44100) + 1; i < Math.round(end * 44100); i++) if (bytes.readInt16LE((i - 1) * 2) <= 0 && bytes.readInt16LE(i * 2) > 0) count++;
+    assert.ok(Math.abs(count / (end - start) - expected) < 10);
+  }
+  await request(service.app).post('/api/jobs').field('parts', '2').field('mode', 'major').field('music', '{bad').attach('file', mp3).expect(400);
 });
 
 test('a disguised non-audio file fails cleanly without publishing any files', async () => {

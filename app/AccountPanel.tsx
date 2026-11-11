@@ -6,7 +6,7 @@ export default function AccountPanel({ disabled, completedProject, onUserChange,
   disabled: boolean;
   completedProject: string;
   onUserChange: (user: AccountUser | null) => void;
-  onOpen: (job: HarmonyJob) => void;
+  onOpen: (job: HarmonyJob) => void | Promise<void>;
 }) {
   const [user, setUser] = useState<AccountUser | null>(null);
   const [checking, setChecking] = useState(true);
@@ -87,7 +87,7 @@ export default function AccountPanel({ disabled, completedProject, onUserChange,
       const response = await fetch(`/api/jobs/${id}`);
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'This project is no longer available.');
-      callbacks.current.onOpen(result);
+      await callbacks.current.onOpen(result);
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not open project.'); }
     finally { setWorking(false); }
   }

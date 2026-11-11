@@ -6,6 +6,37 @@ export const HARMONY_STYLES = {
   hymn: { label: 'Traditional / Hymn', description: 'Classic fifth, third, and octave layers.' },
 } as const;
 export type HarmonyStyle = keyof typeof HARMONY_STYLES;
+export const KEY_NAMES = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'] as const;
+export const SCALES = {
+  major: { label: 'Major', notes: [0, 2, 4, 5, 7, 9, 11] },
+  minor: { label: 'Natural minor', notes: [0, 2, 3, 5, 7, 8, 10] },
+  harmonicMinor: { label: 'Harmonic minor', notes: [0, 2, 3, 5, 7, 8, 11] },
+  dorian: { label: 'Dorian', notes: [0, 2, 3, 5, 7, 9, 10] },
+  mixolydian: { label: 'Mixolydian', notes: [0, 2, 4, 5, 7, 9, 10] },
+} as const;
+export const CHORDS = {
+  maj: { label: 'Major', notes: [0, 4, 7] },
+  min: { label: 'Minor', notes: [0, 3, 7] },
+  maj7: { label: 'Major 7', notes: [0, 4, 7, 11] },
+  min7: { label: 'Minor 7', notes: [0, 3, 7, 10] },
+  dom7: { label: 'Dominant 7', notes: [0, 4, 7, 10] },
+  maj9: { label: 'Major 9', notes: [0, 2, 4, 7, 11] },
+  min9: { label: 'Minor 9', notes: [0, 2, 3, 7, 10] },
+  sus2: { label: 'Sus 2', notes: [0, 2, 7] },
+  sus4: { label: 'Sus 4', notes: [0, 5, 7] },
+  dim: { label: 'Diminished', notes: [0, 3, 6] },
+} as const;
+export interface ChordChange { start: number; root: number; quality: keyof typeof CHORDS; }
+export interface MusicSettings {
+  key: number;
+  scale: keyof typeof SCALES;
+  strategy: 'scale' | 'chords';
+  dyad: 'style' | 'third' | 'fifth' | 'sixth';
+  direction: 'auto' | 'above' | 'below';
+  chords: ChordChange[];
+}
+export const defaultMusic = (minor = false): MusicSettings => ({ key: 0, scale: minor ? 'minor' : 'major', strategy: 'scale', dyad: 'style', direction: 'auto', chords: [] });
+export interface HarmonyNote { start: number; end: number; source: number; target: number; chord?: string; }
 export type Voice = 'tenor' | 'alto' | 'bass';
 export const VOICE_RANGES = {
   bass: { label: 'Bass', low: 40, high: 64 },
@@ -39,6 +70,8 @@ export interface AudioTrack {
   highNote?: string;
   outsideRange?: boolean;
   sourceTrackName?: string;
+  tuning?: 'diatonic' | 'chord-aware';
+  notePlan?: HarmonyNote[];
 }
 
 export interface HarmonyJob {
@@ -61,6 +94,8 @@ export interface HarmonyJob {
   tracks: AudioTrack[];
   takes?: AudioTrack[];
   error?: string;
+  music?: MusicSettings;
+  musicWarning?: string;
 }
 
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
