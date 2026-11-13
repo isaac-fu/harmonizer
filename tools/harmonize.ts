@@ -48,27 +48,53 @@ export function planHarmonies(melody: MelodyFrame[], music: MusicSettings, style
   const steps = style === 'hymn' ? [4, 2, 7] : style === 'neo-soul' ? [2, 6, 8] : [2, 5, 8];
   if (music.dyad !== 'style') steps[0] = { third: 2, fifth: 4, sixth: 5 }[music.dyad];
   const bounds = range ? VOICE_RANGES[range] : { low: 33, high: 88 };
+  // Hold the interpreted note through small boundary crossings from vibrato or
+  // detector noise. A real semitone change still crosses the 0.65-note threshold.
+  let heldSource: number | undefined;
+  let lastEnd = -Infinity;
+  const stableMelody = melody.map(frame => {
+    if (frame.midi === null) return frame;
+    if (heldSource === undefined || frame.start - lastEnd > .2 || Math.abs(frame.midi - heldSource) > .65) heldSource = Math.round(frame.midi);
+    lastEnd = frame.end;
+    return { ...frame, midi: heldSource };
+  });
+  const idealNote = (source: number, voice: number) => {
+    const sign = music.direction === 'below' ? -1 : 1;
+    const index = Math.max(0, Math.min(scaleNotes.length - 1, nearestDegree(source) + steps[voice] * sign));
+    return scaleNotes[index];
+  };
+  // Fit each diatonic line as a whole. Per-frame range penalties can flip a
+  // sixth into a descending third at the range ceiling, causing octave jumps.
+  const octaves = Array.from({ length: count }, (_, voice) => {
+    if (music.direction !== 'auto' || music.strategy !== 'scale') return 0;
+    const score = (octave: number) => stableMelody.reduce((total, frame) => {
+      if (frame.midi === null) return total;
+      const target = idealNote(frame.midi, voice) + octave;
+      if (target === frame.midi || Math.abs(target - frame.midi) > 24 || target < 24 || target > 108) return Infinity;
+      const outside = Math.max(0, bounds.low - target) + Math.max(0, target - bounds.high);
+      return total + (frame.end - frame.start) * (outside * 1000 + Math.abs(octave) * .6);
+    }, 0);
+    return [-24, -12, 0, 12, 24].reduce((best, octave) => score(octave) < score(best) ? octave : best, 0);
+  });
   const plans: HarmonyNote[][] = Array.from({ length: count }, () => []);
   const previous: (number | undefined)[] = Array(count).fill(undefined);
-  const timedFrames = melody.flatMap(frame => {
+  const timedFrames = stableMelody.flatMap(frame => {
     const boundaries = [frame.start, ...music.chords.filter(chord => music.strategy === 'chords' && chord.start > frame.start && chord.start < frame.end).map(chord => chord.start), frame.end];
     return boundaries.slice(0, -1).map((start, i) => ({ ...frame, start, end: boundaries[i + 1] }));
   });
   for (const frame of timedFrames) {
     if (frame.midi === null) continue;
     const source = Math.round(frame.midi);
-    const degree = nearestDegree(source);
     const chord = music.strategy === 'chords' ? music.chords.filter(change => change.start <= frame.start).at(-1) : undefined;
     const allowed = chord ? CHORDS[chord.quality].notes.map(note => pc(note + chord.root)) : null;
     const used: number[] = [];
     for (let voice = 0; voice < count; voice++) {
-      const sign = music.direction === 'below' ? -1 : 1;
-      const index = Math.max(0, Math.min(scaleNotes.length - 1, degree + steps[voice] * sign));
-      const ideal = scaleNotes[index];
+      const ideal = idealNote(source, voice) + octaves[voice];
       const candidates = Array.from({ length: 85 }, (_, i) => i + 24).filter(note => {
         if (Math.abs(note - source) > 24 || note === source || used.includes(note)) return false;
         if (music.direction === 'above' && note <= source) return false;
         if (music.direction === 'below' && note >= source) return false;
+        if (!allowed && music.direction === 'auto' && !used.includes(ideal) && note !== ideal) return false;
         return allowed ? allowed.includes(pc(note)) : pc(note) === pc(ideal);
       });
       if (!candidates.length) continue;

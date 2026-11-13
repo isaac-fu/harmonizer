@@ -57,7 +57,7 @@ The converted `audio_original.mp3` is also playable and downloadable. Existing f
 | Neo-Soul / R&B | Third | Seventh | Ninth |
 | Traditional / Hymn | Fifth | Third | Octave |
 
-Styles now select **scale-degree targets**, not fixed semitone shifts. Modern Pop favors thirds/sixths/ninths, Neo-Soul thirds/sevenths/ninths, and Hymn fifths/thirds/octaves. The dyad control overrides the first part with a diatonic third, fifth, or sixth. In chord mode, these become voicing preferences: actual targets must belong to the active chord. Register fitting and a movement penalty choose octaves and discourage unnecessary leaps. Explicit Above/Below settings constrain the direction; parts that cannot fit the selected vocal range show a warning.
+Styles now select **scale-degree targets**, not fixed semitone shifts. Modern Pop favors thirds/sixths/ninths, Neo-Soul thirds/sevenths/ninths, and Hymn fifths/thirds/octaves. The dyad control overrides the first part with a diatonic third, fifth, or sixth. In chord mode, these become voicing preferences: actual targets must belong to the active chord. Scale-mode register fitting chooses a consistent octave for each complete harmony line to avoid abrupt octave jumps at range boundaries. Chord-mode voicing uses a movement penalty to discourage unnecessary leaps. Small pitch fluctuations around note boundaries are held stable while preserving vibrato in the source audio. Explicit Above/Below settings constrain the direction; parts that cannot fit the selected vocal range show a warning.
 
 These are voicing presets, not genre-trained models or independent rhythmic arrangements. Chord changes come from the timeline you enter; there is no automatic chord recognition.
 
